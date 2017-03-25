@@ -1,0 +1,6 @@
+notebooks*
+mlb_data*
+models*
+pickles*
+.ipynb*
+ml_plans.txt

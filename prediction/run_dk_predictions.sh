@@ -1,0 +1,1 @@
+python run_dk_predictions.py --dk_salaries '../mlb_data/DK_salaries/DKSalariesBaseball.csv' --slate_date '2015-09-02' --data_dir '../mlb_data/' --hitters_model '../models/batting/25mar2017/model.pkl' --pitchers_model '../models/pitching/25mar2017/model.pkl'
