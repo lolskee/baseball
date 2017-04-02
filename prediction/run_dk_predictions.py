@@ -15,8 +15,8 @@ import argparse
 import os 
 import pickle
 
-BATTING_TRAIN_COLS = pickle.load(open('../pickles/batter_train_columns.pkl'))
-PITCHER_TRAIN_COLS = pickle.load(open('../pickles/pitcher_train_columns.pkl'))
+# BATTING_TRAIN_COLS = pickle.load(open('../pickles/batter_train_columns.pkl'))
+# PITCHER_TRAIN_COLS = pickle.load(open('../pickles/pitcher_train_columns.pkl'))
 
 def parse_args():
 	parser = argparse.ArgumentParser()
@@ -30,7 +30,7 @@ def parse_args():
 class DataError(Exception):
 	pass
 
-class Batter(dk_player):
+class Batter:
 	def __init__(self, dk_player):
 		self.name = dk_player.Name 
 		self.position = dk_player.Position 
@@ -81,24 +81,32 @@ def get_and_parse_daily_lineups(slate_date):
 def scrape_mlb_vegas_lines(slate_date):
 	money_line_url = 'http://www.sportsbookreview.com/betting-odds/mlb-baseball/?date={}'
 	over_under_url = 'http://www.sportsbookreview.com/betting-odds/mlb-baseball/totals/?date={}'
-	sbr_date = slate_date.strip('-')
+	sbr_date = slate_date.replace('-', '')
 
 	#scrape money lines 
-	ml_soup = BeautifulSoup(urlopen(money_line_url.format(sbr_date)).read(), "lxml")
+	# print(sbr_date)
+	u = money_line_url.format(sbr_date)
+	# print(u)
+	ml_soup = BeautifulSoup(urlopen(u).read(), "lxml")
 	game_data_list = list()
 	game_data_header = 'month_day,home_team,away_team,home_pitcher,away_pitcher,home_ml,away_ml'
+	month_day = sbr_date[-4:] if sbr_date[-4:][0] != '0' else sbr_date[-3:]
 	for div in ml_soup.findAll('div', {'class': 'data'}):
 		for game in div.findAll('div', {'class': 'event-holder'}):
 			try:
-				game_data = month_day + ', '
 				for i, tag in enumerate(game.findAll()):
-					if i == 36:
+					# print(i, tag.text)
+					if i == 27:
+						# print(i, tag.text)
 						away_team, away_pitcher = tag.text.split('-')
-					if i == 42:
+					if i == 32:
+						# print(i, tag.text)
 						home_team, home_pitcher = tag.text.split('-')
-					if i == 59:
+					if i == 49:
+						# print(i, tag.text)
 						away_ml = tag.text
-					if i == 61:
+					if i == 51:
+						# print(i, tag.text)
 						home_ml = tag.text
 				gd = [month_day, home_team, away_team, 
 					home_pitcher, away_pitcher, home_ml, away_ml[-4:]]
@@ -111,15 +119,16 @@ def scrape_mlb_vegas_lines(slate_date):
 				pass
 
 	#scrape over/unders
-	ou_soup = BeautifulSoup(urlopen(over_under_base_url.format(date)).read(), "lxml")
+	ou_soup = BeautifulSoup(urlopen(over_under_url.format(sbr_date)).read(), "lxml")
 	ou_data_list = list()
 	for div in ou_soup.findAll('div', {'class': 'data'}):
 		for game_index, game in enumerate(div.findAll('div', {'class': 'event-holder'})):
 			try:
 				for i, tag in enumerate(game.findAll()):
-					if i == 38:
+					# print(i, tag.text)
+					if i == 27:
 						ou_away_pitcher = tag.text.split('-')[1]
-					if i == 67:
+					if i == 45:
 						over_under_text = tag.text.replace('+', '-').split('\xa0')[0]
 						#deal with weird chars when over/under is a fraction
 						try:
