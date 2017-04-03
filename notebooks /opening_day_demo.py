@@ -76,9 +76,9 @@ def get_starters(lineups):
     for game, info in lineups.items():
         starters.append(info['away_SP'])
         starters.append(info['home_SP'])
-        if len(info['away_lineup']) == 9:
+        if len(info['away_lineup']) > 0:
             starters += info['away_lineup']
-        if len(info['home_lineup']) == 9:
+        if len(info['home_lineup']) > 0:
             starters += info['home_lineup']
     return starters
 
@@ -125,8 +125,8 @@ complete_lineups = {k: v for k, v in lineups.items() if v['home_lineup'] != []}
 print('\n{} of {} lineups confirmed...'.format(len(complete_lineups), len(lineups)))
 
 vegas_lines = dkp.scrape_mlb_vegas_lines(slate_date)
-# print('\n\tVegas lines')
-# print(vegas_lines)
+print('\nVegas lines')
+print(vegas_lines)
 
 #Subsetting slate to confirmed starters 
 starters = get_starters(lineups)
@@ -153,11 +153,11 @@ pitcher_dict = get_pitcher_dict(lineups)
 # pitcher_dict['MIA@WAS'] = pitcher_dict['MIA@WSH']
 pitcher_dict['DET@CWS'] = pitcher_dict['DET@CHW']
 pitcher_dict['KC@MIN '] = pitcher_dict['KCR@MIN']
-
+pitcher_dict['SD@LAD '] = pitcher_dict['SDP@LAD']
 
 
 hitters['Pitcher'] = hitters.apply(lambda row: 
-    pitcher_dict[row.GameInfo.upper()[:7]][1] if row.teamAbbrev.upper() == row.GameInfo.upper()[:3]
+    pitcher_dict[row.GameInfo.upper()[:7]][1] if row.teamAbbrev.upper() == row.GameInfo.split('@')[0].upper()
     else pitcher_dict[row.GameInfo.upper()[:7]][0], axis=1)
 
 hitters = hitters.merge(pitchers, left_on='Pitcher', right_on='Name', suffixes=['_batter', '_pitcher'])
@@ -432,6 +432,9 @@ pitcher_pred_df = pd.DataFrame({'Player': pitchers_.pitcher,
                                      'Position': ['SP']*pitchers_.shape[0], 
                                      'Salary': pitchers_.pitcher_dk_salary, 
                                      'Prediction': pitcher_predictions})
+
+print('Pitcher predictions...')
+print(pitcher_pred_df)
 
 predictions = pd.concat([batter_prediction_df, pitcher_pred_df])
 predictions = predictions.drop_duplicates(subset=['Player'])
