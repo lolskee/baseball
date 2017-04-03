@@ -33,6 +33,37 @@ from datetime import datetime
 from pprint import pprint
 warnings.filterwarnings("ignore")
 
+def scrape_roto_grinders():
+    url = 'https://rotogrinders.com/lineups/mlb?site=draftkings'
+    soup = BeautifulSoup(urlopen(url).read(), "lxml")
+    ul = soup.findAll('ul', {'class': 'lineup'})
+    game_data = dict()
+    games = list()
+    pitchers = list()
+    for li in ul:
+        for i, lineup_card in enumerate(li.findAll('li', {'data-role': 'lineup-card'})):
+            game = lineup_card['data-away'] + '@' + lineup_card['data-home']
+            games.append(game)
+            game_data[game] = dict()
+        for i, pitcher_div in enumerate(li.findAll('div', {'class': 'pitcher'})):
+            if i % 2 == 0:
+                ptext = pitcher_div.text.split()
+                game_data[games[int(i/2)]]['away_SP'] = ptext[0] + ' ' + ptext[1]
+            if i % 2 == 1:
+                ptext = pitcher_div.text.split()
+                game_data[games[int(i/2)]]['home_SP'] = ptext[0] + ' ' + ptext[1]
+            pitchers.append(ptext[0] + ' ' + ptext[1])
+        for i, lineup in enumerate(li.findAll('ul', {'class': 'players'})):
+            lineup_list = list()
+            for player in lineup.findAll('li', {'class': 'player'}):
+                player_text = player.text.split()
+                lineup_list.append(player_text[1] + ' ' + player_text[2])
+            if i % 2 == 0:
+                game_data[games[int(i/2)]]['away_lineup'] = lineup_list
+            if i % 2 == 1:
+                game_data[games[int(i/2)]]['home_lineup'] = lineup_list
+    return game_data
+
 def most_recent_dk_salaries(path):
     mtime = lambda f: -os.stat(os.path.join(path, f)).st_mtime
     sorted_files = list(sorted(os.listdir(path), key=mtime))
@@ -87,7 +118,8 @@ slate = pd.read_csv(path_to_dk_salaries)
 
 #Gathering Starting Lineups and Vegas Lines 
 print('Generating Optimal MLB Lineup for {}'.format(slate_date))
-lineups = dkp.get_and_parse_daily_lineups(slate_date)
+# lineups = dkp.get_and_parse_daily_lineups(slate_date)
+lineups = scrape_roto_grinders()
 # pprint(lineups)
 complete_lineups = {k: v for k, v in lineups.items() if v['home_lineup'] != []}
 print('\n{} of {} lineups confirmed...'.format(len(complete_lineups), len(lineups)))
@@ -118,7 +150,10 @@ for i, row in hitters.iterrows():
 pitcher_dict = get_pitcher_dict(lineups)
 
 #Taking care of multiple team abbreviations 
-pitcher_dict['MIA@WAS'] = pitcher_dict['MIA@WSH']
+# pitcher_dict['MIA@WAS'] = pitcher_dict['MIA@WSH']
+pitcher_dict['DET@CWS'] = pitcher_dict['DET@CHW']
+pitcher_dict['KC@MIN '] = pitcher_dict['KCR@MIN']
+
 
 
 hitters['Pitcher'] = hitters.apply(lambda row: 
@@ -165,6 +200,13 @@ vegas_lines['away_pitcher_throws'] = vegas_lines.away_pitcher.apply(
 vegas_lines['home_pitcher'] = vegas_lines.home_pitcher.apply(lambda x: x[:-3])
 vegas_lines['away_pitcher'] = vegas_lines.away_pitcher.apply(lambda x: x[:-3])
 
+
+vegas_lines.loc[0, 'away_pitcher'] = 'Volquez'
+vegas_lines.loc[6, 'away_pitcher'] = 'Hernandez'
+vegas_lines.loc[1, 'away_pitcher'] = 'Teheran'
+print('Vegas Lines')
+print(vegas_lines)
+
 stacked_vegas_lines = stack_vegas_lines_by_pitcher(vegas_lines)
 
 hitters['pitcher_last_name'] = hitters.pitcher.apply(lambda x: x.split()[1])
@@ -182,6 +224,8 @@ hitters_.drop([
 ], axis=1, inplace=1)
 
 hitters_.rename(index=str, columns={'pitcher_x': 'pitcher'}, inplace=1)
+
+# print(hitters_[hitters_.home_ml.isnull()])
 
 #Converting money lines into probabilities 
 hitters_['home_team_win_probability'] = hitters_.home_ml.apply(convert_moneyline_into_prob)
@@ -391,6 +435,7 @@ pitcher_pred_df = pd.DataFrame({'Player': pitchers_.pitcher,
 
 predictions = pd.concat([batter_prediction_df, pitcher_pred_df])
 predictions = predictions.drop_duplicates(subset=['Player'])
+predictions.reset_index(inplace=1)
 
 
 #Optimization
@@ -419,10 +464,14 @@ solver = pywraplp.Solver('FD', pywraplp.Solver.CBC_MIXED_INTEGER_PROGRAMMING)
 
 variables = [solver.IntVar(0, 1, row.Player) for _, row in predictions.iterrows()]
 
+
 objective = solver.Objective()
 objective.SetMaximization()
 
 [objective.SetCoefficient(variables[i], row.Salary) for i, row in predictions.iterrows()]
+
+salary_cap = solver.Constraint(0, SALARY_CAP)
+[salary_cap.SetCoefficient(variables[i], row.Salary) for i, row in predictions.iterrows()]
 
 for position, min_limit, max_limit in POSITION_LIMITS:
     position_cap = solver.Constraint(min_limit, max_limit) 
@@ -453,4 +502,6 @@ else:
 roster_df = pd.DataFrame(roster)
 print('Optimization complete! Optimal MLB Lineup for {}:\n'.format(slate_date))
 print(tabulate.tabulate(roster, tablefmt="psql", headers="keys"))
+print('\nTotal Projected Points:', roster_df.Projection.sum())
+print('Total Salary Spent:', roster_df['DK Salary'].apply(lambda x: int(x.replace('$', ''))).sum())
 
