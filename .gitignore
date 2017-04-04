@@ -4,3 +4,5 @@ models*
 pickles*
 .ipynb*
 ml_plans.txt
+*.java
+*.class

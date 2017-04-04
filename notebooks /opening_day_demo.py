@@ -31,10 +31,12 @@ import tabulate
 import warnings
 from datetime import datetime
 from pprint import pprint
+from subprocess import check_output
+import ast 
 warnings.filterwarnings("ignore")
 
-def scrape_roto_grinders():
-    url = 'https://rotogrinders.com/lineups/mlb?site=draftkings'
+def scrape_roto_grinders(slate_date):
+    url = 'https://rotogrinders.com/lineups/mlb?site=draftkings&date={}'.format(slate_date)
     soup = BeautifulSoup(urlopen(url).read(), "lxml")
     ul = soup.findAll('ul', {'class': 'lineup'})
     game_data = dict()
@@ -107,7 +109,7 @@ __path_to_prediction_script__ = '../prediction/'
 sys.path.append(__path_to_prediction_script__)
 import run_dk_predictions as dkp
 
-slate_date = '2017-04-03'
+slate_date = '2017-04-04'
 # slate_date = str(datetime.now()).split()[0]
 downloads = '../../Downloads/'
 
@@ -119,14 +121,14 @@ slate = pd.read_csv(path_to_dk_salaries)
 #Gathering Starting Lineups and Vegas Lines 
 print('Generating Optimal MLB Lineup for {}'.format(slate_date))
 # lineups = dkp.get_and_parse_daily_lineups(slate_date)
-lineups = scrape_roto_grinders()
+lineups = scrape_roto_grinders(slate_date)
 # pprint(lineups)
 complete_lineups = {k: v for k, v in lineups.items() if v['home_lineup'] != []}
 print('\n{} of {} lineups confirmed...'.format(len(complete_lineups), len(lineups)))
 
 vegas_lines = dkp.scrape_mlb_vegas_lines(slate_date)
-print('\nVegas lines')
-print(vegas_lines)
+# print('\nVegas lines')
+# print(vegas_lines)
 
 #Subsetting slate to confirmed starters 
 starters = get_starters(lineups)
@@ -151,9 +153,11 @@ pitcher_dict = get_pitcher_dict(lineups)
 
 #Taking care of multiple team abbreviations 
 # pitcher_dict['MIA@WAS'] = pitcher_dict['MIA@WSH']
-pitcher_dict['DET@CWS'] = pitcher_dict['DET@CHW']
-pitcher_dict['KC@MIN '] = pitcher_dict['KCR@MIN']
+# pitcher_dict['DET@CWS'] = pitcher_dict['DET@CHW']
+# pitcher_dict['KC@MIN '] = pitcher_dict['KCR@MIN']
 pitcher_dict['SD@LAD '] = pitcher_dict['SDP@LAD']
+pitcher_dict['SF@ARI '] = pitcher_dict['SFG@ARI']
+pitcher_dict['NYY@TB '] = pitcher_dict['NYY@TBR']
 
 
 hitters['Pitcher'] = hitters.apply(lambda row: 
@@ -200,10 +204,10 @@ vegas_lines['away_pitcher_throws'] = vegas_lines.away_pitcher.apply(
 vegas_lines['home_pitcher'] = vegas_lines.home_pitcher.apply(lambda x: x[:-3])
 vegas_lines['away_pitcher'] = vegas_lines.away_pitcher.apply(lambda x: x[:-3])
 
-
-vegas_lines.loc[0, 'away_pitcher'] = 'Volquez'
-vegas_lines.loc[6, 'away_pitcher'] = 'Hernandez'
-vegas_lines.loc[1, 'away_pitcher'] = 'Teheran'
+#Fixing vegas lines (mispelled pitcher names, missing money lines, etc.)
+vegas_lines.loc[5, 'home_pitcher'] = 'Perez'
+vegas_lines.loc[8, 'home_ml'] = '+115'
+vegas_lines.loc[8, 'away_ml'] = '-125'
 print('Vegas Lines')
 print(vegas_lines)
 
@@ -226,6 +230,8 @@ hitters_.drop([
 hitters_.rename(index=str, columns={'pitcher_x': 'pitcher'}, inplace=1)
 
 # print(hitters_[hitters_.home_ml.isnull()])
+
+hitters_ = hitters_[-hitters_.home_ml.isnull()]
 
 #Converting money lines into probabilities 
 hitters_['home_team_win_probability'] = hitters_.home_ml.apply(convert_moneyline_into_prob)
@@ -438,73 +444,119 @@ print(pitcher_pred_df)
 
 predictions = pd.concat([batter_prediction_df, pitcher_pred_df])
 predictions = predictions.drop_duplicates(subset=['Player'])
+
+print('\nPlayers unable to assign predictions to:\n')
+print([p for p in starting.Name.values if p not in predictions.Player.values])
+
+
+# print('\nTravis Shaw:')
+# print(predictions[predictions.Player == 'Travis Shaw'])
+
+#droping players
+# predictions = predictions[predictions.Player != 'Clayton Kershaw']
+# predictions = predictions[predictions.Player != 'Jose Ramirez']
+# predictions = predictions[predictions.Player != 'Justin Verlander']
+# predictions = predictions[predictions.Player != 'Justin Turner']
+
+#Reformatting predictions df to work with protella_opt
 predictions.reset_index(inplace=1)
+multi_pos = predictions.loc[predictions.Position.str.contains('/')]
+multi_pos1 = multi_pos.copy()
+multi_pos2 = multi_pos.copy()
+multi_pos1.Position = multi_pos.Position.apply(lambda x: x[:x.find('/')])
+multi_pos2.Position = multi_pos.Position.apply(lambda x: x[x.find('/') + 1:])
+split_predictions = predictions.loc[~predictions.Position.str.contains('/'), :].append(multi_pos1).append(multi_pos2)
+split_predictions.loc[split_predictions.Position == 'SP', 'Position'] = 'P'
+split_predictions.Salary = split_predictions.Salary.apply(lambda x : int(1000 * x))
+split_predictions.loc[:, ['Player', 'Position', 'Prediction', 'Salary']].to_csv(
+    '/tmp/dk_mlb_predictions.csv', header=None, index=None)
 
 
 #Optimization
 print('Optimizing predictions...\n')
 
+#FUCK ORTOOLS! run protella_opt!!!
+
+cmd = 'javac LineupOptimizerDK_MLB.java && java LineupOptimizerDK_MLB'
+result = check_output([cmd], shell=True)
+lineups = ast.literal_eval(result.decode())
+optimal_lineup = lineups[-1]
+optimal_players = [p.split('(')[0] for p in optimal_lineup]
+optimal_player_positions = {p.split('(')[0]: p.split('(')[1].split(')')[0] for p in optimal_lineup}
+
+optimal_df = split_predictions[split_predictions.Player.isin(optimal_players)]
+
+# optimal_df['optimal_position'] = optimal_df.Player.apply(lambda x: optimal_player_positions[x])
+# optimal_df['keep'] = optimal_df.apply(lambda row: 1 if row.Position == row.optimal_position else 0, axis=1)
+
+# optimal_df = optimal_df[optimal_df.Position == optimal_df.optimal_position]
+
+# optimal_df.drop('optimal_position', axis=1, inplace=1)
+
+optimal_df.drop_duplicates(subset=['Player'], inplace=1)
+
 #Hacking ortools import due to PYTHONPATH issues, don't ask...
-__path_to_ortools__ = '../../../../lib/python3.5/site-packages'
-sys.path.append(__path_to_ortools__)
-from ortools.linear_solver import pywraplp
+# __path_to_ortools__ = '../../../../lib/python3.5/site-packages'
+# sys.path.append(__path_to_ortools__)
+# from ortools.linear_solver import pywraplp
 
-#Set optimization constraints
-SALARY_CAP = 50
-POSITION_LIMITS = [
-    ["SP", 2, 2],
-    ["C", 1, 1],
-    ["1B", 1, 1],
-    ["2B", 1, 1],
-    ["3B", 1, 1],
-    ["SS", 1, 1],
-    ["OF", 3, 3]
-]
-ROSTER_SIZE = 10
+# #TODO cycle through optimization with all combinations of pitchers 
 
-#Init solver and define variables
-solver = pywraplp.Solver('FD', pywraplp.Solver.CBC_MIXED_INTEGER_PROGRAMMING)
+# #Set optimization constraints
+# SALARY_CAP = 50
+# POSITION_LIMITS = [
+#     ["SP", 2, 2],
+#     ["C", 1, 1],
+#     ["1B", 1, 1],
+#     ["2B", 1, 1],
+#     ["3B", 1, 1],
+#     ["SS", 1, 1],
+#     ["OF", 3, 3]
+# ]
+# ROSTER_SIZE = 10
 
-variables = [solver.IntVar(0, 1, row.Player) for _, row in predictions.iterrows()]
+# #Init solver and define variables
+# solver = pywraplp.Solver('FD', pywraplp.Solver.CBC_MIXED_INTEGER_PROGRAMMING)
+
+# variables = [solver.IntVar(0, 1, row.Player) for _, row in predictions.iterrows()]
 
 
-objective = solver.Objective()
-objective.SetMaximization()
+# objective = solver.Objective()
+# objective.SetMaximization()
 
-[objective.SetCoefficient(variables[i], row.Salary) for i, row in predictions.iterrows()]
+# [objective.SetCoefficient(variables[i], row.Salary) for i, row in predictions.iterrows()]
 
-salary_cap = solver.Constraint(0, SALARY_CAP)
-[salary_cap.SetCoefficient(variables[i], row.Salary) for i, row in predictions.iterrows()]
+# salary_cap = solver.Constraint(0, SALARY_CAP)
+# [salary_cap.SetCoefficient(variables[i], row.Salary) for i, row in predictions.iterrows()]
 
-for position, min_limit, max_limit in POSITION_LIMITS:
-    position_cap = solver.Constraint(min_limit, max_limit) 
-    for i, row in predictions.iterrows():
-        if position in row.Position:
-            position_cap.SetCoefficient(variables[i], 1)  
+# for position, min_limit, max_limit in POSITION_LIMITS:
+#     position_cap = solver.Constraint(min_limit, max_limit) 
+#     for i, row in predictions.iterrows():
+#         if position in row.Position:
+#             position_cap.SetCoefficient(variables[i], 1)  
 
-size_cap = solver.Constraint(ROSTER_SIZE, ROSTER_SIZE)
+# size_cap = solver.Constraint(ROSTER_SIZE, ROSTER_SIZE)
 
-[size_cap.SetCoefficient(variable, 1) for variable in variables]
+# [size_cap.SetCoefficient(variable, 1) for variable in variables]
 
-solution = solver.Solve()
+# solution = solver.Solve()
 
-roster = list()
+# roster = list()
 
-if solution == solver.OPTIMAL:
-    for i, row in predictions.iterrows():
-        if variables[i].solution_value() == 1:
-            roster.append({
-                'Player': row.Player,
-                'Position': row.Position,
-                'DK Salary': '$' + str(int(row.Salary*1000)),
-                'Projection': round(row.Prediction, 2)
-                })
-else:
-    raise SolverError('Google-ortools was unable to find an optimal lineup. Check constraints and try again.')
+# if solution == solver.OPTIMAL:
+#     for i, row in predictions.iterrows():
+#         if variables[i].solution_value() == 1:
+#             roster.append({
+#                 'Player': row.Player,
+#                 'Position': row.Position,
+#                 'DK Salary': '$' + str(int(row.Salary*1000)),
+#                 'Projection': round(row.Prediction, 2)
+#                 })
+# else:
+#     raise SolverError('Google-ortools was unable to find an optimal lineup. Check constraints and try again.')
 
-roster_df = pd.DataFrame(roster)
 print('Optimization complete! Optimal MLB Lineup for {}:\n'.format(slate_date))
-print(tabulate.tabulate(roster, tablefmt="psql", headers="keys"))
-print('\nTotal Projected Points:', roster_df.Projection.sum())
-print('Total Salary Spent:', roster_df['DK Salary'].apply(lambda x: int(x.replace('$', ''))).sum())
+print(tabulate.tabulate(optimal_df, tablefmt="psql", headers="keys"))
+print('\nTotal Projected Points:', optimal_df.Prediction.sum())
+print('Total Salary Spent:', optimal_df.Salary.sum())
 
