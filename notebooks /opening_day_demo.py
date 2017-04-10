@@ -33,6 +33,7 @@ from datetime import datetime
 from pprint import pprint
 from subprocess import check_output
 import ast 
+import re 
 warnings.filterwarnings("ignore")
 
 def scrape_roto_grinders(slate_date):
@@ -48,22 +49,29 @@ def scrape_roto_grinders(slate_date):
             games.append(game)
             game_data[game] = dict()
         for i, pitcher_div in enumerate(li.findAll('div', {'class': 'pitcher'})):
-            if i % 2 == 0:
-                ptext = pitcher_div.text.split()
-                game_data[games[int(i/2)]]['away_SP'] = ptext[0] + ' ' + ptext[1]
-            if i % 2 == 1:
-                ptext = pitcher_div.text.split()
-                game_data[games[int(i/2)]]['home_SP'] = ptext[0] + ' ' + ptext[1]
-            pitchers.append(ptext[0] + ' ' + ptext[1])
+            try:
+                if i % 2 == 0:
+                    ptext = pitcher_div.text.split()
+                    game_data[games[int(i/2)]]['away_SP'] = ptext[0] + ' ' + ptext[1]
+                if i % 2 == 1:
+                    ptext = pitcher_div.text.split()
+                    game_data[games[int(i/2)]]['home_SP'] = ptext[0] + ' ' + ptext[1]
+                pitchers.append(ptext[0] + ' ' + ptext[1])
+            except:
+                print('format error for pitcher in game:', game)
         for i, lineup in enumerate(li.findAll('ul', {'class': 'players'})):
             lineup_list = list()
             for player in lineup.findAll('li', {'class': 'player'}):
-                player_text = player.text.split()
-                lineup_list.append(player_text[1] + ' ' + player_text[2])
+                try:
+                    player_text = player.text.split()
+                    lineup_list.append(player_text[1] + ' ' + player_text[2])
+                except:
+                    print('format error for lineup in game:', game)
             if i % 2 == 0:
                 game_data[games[int(i/2)]]['away_lineup'] = lineup_list
             if i % 2 == 1:
                 game_data[games[int(i/2)]]['home_lineup'] = lineup_list
+    # pprint(game_data)
     return game_data
 
 def most_recent_dk_salaries(path):
@@ -109,7 +117,7 @@ __path_to_prediction_script__ = '../prediction/'
 sys.path.append(__path_to_prediction_script__)
 import run_dk_predictions as dkp
 
-slate_date = '2017-04-04'
+slate_date = '2017-04-09'
 # slate_date = str(datetime.now()).split()[0]
 downloads = '../../Downloads/'
 
@@ -118,10 +126,30 @@ path_to_dk_salaries = most_recent_dk_salaries(downloads)
 # path_to_dk_salaries = '../../Downloads/DKSalaries (3).csv'
 slate = pd.read_csv(path_to_dk_salaries)
 
+slate.loc[slate.Name == 'Lance McCullers Jr.', 'Name'] = 'Lance McCullers'
+
 #Gathering Starting Lineups and Vegas Lines 
 print('Generating Optimal MLB Lineup for {}'.format(slate_date))
 # lineups = dkp.get_and_parse_daily_lineups(slate_date)
 lineups = scrape_roto_grinders(slate_date)
+
+if slate_date == '2017-04-09':
+    lineups['KCR@HOU']['away_SP'] = 'Nathan Karns'
+#Making additions 
+# lineups['PHI@CIN']['home_SP'] = 'Rookie Davis'
+
+
+
+
+
+# #filtering by morning games 
+# lineups = {k:v for k,v in lineups.items() if k in ['BOS@DET', 'MIN@CHW', 'CIN@STL', 'NYY@BAL', 'TOR@TBR']}
+# pprint(lineups)
+
+
+
+
+
 # pprint(lineups)
 complete_lineups = {k: v for k, v in lineups.items() if v['home_lineup'] != []}
 print('\n{} of {} lineups confirmed...'.format(len(complete_lineups), len(lineups)))
@@ -136,8 +164,8 @@ starting = slate[slate.Name.isin(starters)]
 print('\n{} starters confirmed'.format(len(starters)))
 
 #Splitting up starters into pitchers and hitters
-pitchers = starting[starting.Position == 'SP']
-hitters = starting[starting.Position != 'SP']
+pitchers = starting[starting.Position.isin(['SP', 'RP'])]
+hitters = starting[-starting.Position.isin(['SP', 'RP'])]
 
 # Getting Batting Order 
 hitters['batting_order'] = 0
@@ -152,17 +180,24 @@ for i, row in hitters.iterrows():
 pitcher_dict = get_pitcher_dict(lineups)
 
 #Taking care of multiple team abbreviations 
-# pitcher_dict['MIA@WAS'] = pitcher_dict['MIA@WSH']
-# pitcher_dict['DET@CWS'] = pitcher_dict['DET@CHW']
-# pitcher_dict['KC@MIN '] = pitcher_dict['KCR@MIN']
-pitcher_dict['SD@LAD '] = pitcher_dict['SDP@LAD']
-pitcher_dict['SF@ARI '] = pitcher_dict['SFG@ARI']
-pitcher_dict['NYY@TB '] = pitcher_dict['NYY@TBR']
 
+# print(pitcher_dict)
+
+pitcher_dict['KC@HOU'] = pitcher_dict['KCR@HOU']
+pitcher_dict['TOR@TB'] = pitcher_dict['TOR@TBR']
+pitcher_dict['SF@SD'] = pitcher_dict['SFG@SDP']
+# pitcher_dict['WAS@PHI'][1] = 'Vince Velasquez'
+pitcher_dict['MIN@CWS'] = pitcher_dict['MIN@CHW']
+# pitcher_dict['SD@LAD '] = pitcher_dict['SDP@LAD']
+# pitcher_dict['TOR@TB '] = pitcher_dict['TOR@TBR']
+
+gi = r'\w{2,3}\@\w{2,3}'
 
 hitters['Pitcher'] = hitters.apply(lambda row: 
-    pitcher_dict[row.GameInfo.upper()[:7]][1] if row.teamAbbrev.upper() == row.GameInfo.split('@')[0].upper()
-    else pitcher_dict[row.GameInfo.upper()[:7]][0], axis=1)
+    pitcher_dict[re.match(gi, row.GameInfo.upper()).group(0)][1] 
+    if row.teamAbbrev.upper() == row.GameInfo.split('@')[0].upper()
+    else pitcher_dict[re.match(gi, row.GameInfo.upper()).group(0)][0], axis=1)
+
 
 hitters = hitters.merge(pitchers, left_on='Pitcher', right_on='Name', suffixes=['_batter', '_pitcher'])
 
@@ -204,14 +239,22 @@ vegas_lines['away_pitcher_throws'] = vegas_lines.away_pitcher.apply(
 vegas_lines['home_pitcher'] = vegas_lines.home_pitcher.apply(lambda x: x[:-3])
 vegas_lines['away_pitcher'] = vegas_lines.away_pitcher.apply(lambda x: x[:-3])
 
-#Fixing vegas lines (mispelled pitcher names, missing money lines, etc.)
-vegas_lines.loc[5, 'home_pitcher'] = 'Perez'
-vegas_lines.loc[8, 'home_ml'] = '+115'
-vegas_lines.loc[8, 'away_ml'] = '-125'
-print('Vegas Lines')
-print(vegas_lines)
+
+# 'Martnez'
+#Fixing vegas lines (mispelled pitcher names, missing money lines, etc.
+vegas_lines.loc[vegas_lines['away_pitcher'] == 'Tehern', 'away_pitcher'] = 'Teheran'
+vegas_lines.loc[vegas_lines['home_pitcher'] == 'Martnez', 'home_pitcher'] = 'Martinez'
+# vegas_lines.loc[vegas_lines['away_pitcher'] == 'Hernndez', 'away_pitcher'] = 'Hernandez'
+# vegas_lines.loc[vegas_lines['home_team'] == 'CWS', 'away_pitcher'] = 'Mejia'
+# vegas_lines.loc[12, 'home_ml'] = '+120'
+# vegas_lines.loc[12, 'away_ml'] = '-130'
+# print('Vegas Lines')
+# print(vegas_lines)
 
 stacked_vegas_lines = stack_vegas_lines_by_pitcher(vegas_lines)
+# stacked_vegas_lines.loc[:, stacked_vegas_lines['pitcher'] == 'Coln'].pitcher = 'Colon'
+print('stacked_vegas_lines')
+print(stacked_vegas_lines)
 
 hitters['pitcher_last_name'] = hitters.pitcher.apply(lambda x: x.split()[1])
 hitters_ = hitters.merge(stacked_vegas_lines, left_on='pitcher_last_name', right_on='pitcher', how='left')
@@ -269,6 +312,7 @@ print('\t\t', hitters2.shape)
 print("\t\tDimensions of hitters dataframe without NAs")
 print('\t\t', hitters2.dropna().shape)
 
+
 if hitters2.shape != hitters2.dropna().shape:
     print('\n\tChecking for traded players...')
     traded_players = hitters2[hitters2.AB.isnull()].batter.values
@@ -280,13 +324,30 @@ if hitters2.shape != hitters2.dropna().shape:
         traded.drop('batter_team_y', axis=1, inplace=1)
         traded.rename(index=str, columns={'batter_team_x': 'batter_team'}, inplace=1)
         hitters2 = pd.concat([hitters2, traded])
+        still_na_players = hitters2[hitters2.AB.isnull()].batter.values
+        if len(still_na_players) > 0:
+            print('Supplement\n')
+            supplement = hitters_[hitters_.batter.isin(still_na_players)].merge(
+                mlb_splits, on=['last_name'], how='left')
+            supplement.drop(['batter_team_y', 'Pitching Preference_y'], axis=1, inplace=1)
+            supplement.rename(index=str, 
+                columns={'batter_team_x': 'batter_team', 'Pitching Preference_x': 'Pitching Preference'}, inplace=1)
+            # print(supplement.columns)
+            # print(hitters2.columns)
+            hitters2 = pd.concat([hitters2, supplement])
+            hitters2.reset_index(inplace=1)
+            hitters2.drop('index', axis=1, inplace=1)
+
     print('After including {} traded players'.format(len(traded_players)))
     print("\t\tDimensions of hitters dataframe with NAs")
     print('\t\t', hitters2.shape)
     print("\t\tDimensions of hitters dataframe without NAs")
     print('\t\t', hitters2.dropna().shape)
 
+# print(hitters2[hitters2.OPS.isnull()])
+
 hitters2 = hitters2.dropna()
+
 
 #Getting pitching splits 
 pitch_split_dfs = pd.DataFrame()
@@ -297,10 +358,17 @@ for combo in combos:
     pitch_split_df['Batting Preference'] = [combo[1]]*pitch_split_df.shape[0]
     pitch_split_dfs = pd.concat([pitch_split_dfs, pitch_split_df])
 
+# hitters2.loc[hitters2.pitcher == 'Madison Bumgarner', 'Pitching Preference'] = 'L'
+# print(hitters2[hitters2.pitcher == 'Lance McCullers'][['pitcher', 'Pitching Preference', 'Batting Preference']])
+# print(pitch_split_dfs[pitch_split_dfs.PLAYER == 'Lance McCullers'][['PLAYER', 'Pitching Preference', 'Batting Preference']])
+
+# sys.exit()
+
 hitters3 = hitters2.merge(pitch_split_dfs, 
                          left_on=['pitcher', 'Pitching Preference', 'Batting Preference'],
                          right_on=['PLAYER', 'Pitching Preference', 'Batting Preference'], how='left')
 
+# print(hitters3[hitters3.pitcher == 'Adalberto Mejia'])
 #Calculations
 X = hitters3.copy()
 
@@ -327,6 +395,8 @@ X['pitcher_win_probability'] = X.apply(lambda row:
 X['batter_win_probability'] = X.apply(lambda row: 
                                        row.home_team_win_probability if row.batter_home 
                                        else row.away_team_win_probability, axis=1)
+# X['pitcher_win_probability'] = X.away_team_win_probability if X.batter_home else X.home_team_win_probability
+# X['batter_win_probability'] = X.home_team_win_probability if X.batter_home else X.away_team_win_probability
 X['batter_batting_order'] = X.batting_order
 
 X.drop([
@@ -405,14 +475,45 @@ training_columns = ['batter_batting_order', 'pitcher_dk_salary', 'batter_home', 
 
 #Training hitter model on master dataset 
 print('Training hitter model...\n')
-batter_model = RandomForestRegressor(n_estimators=300, max_depth=15, max_features=10)
+N=300
+batter_model = RandomForestRegressor(n_estimators=N, max_depth=15, max_features=10)
 batter_model.fit(master[training_columns], master.batter_dk_points)
 X = X.dropna()
+
+#Adding in percentiles to cater to cash games/tourneys 
+batter_tree_predictions = np.array([tree.predict(X[training_columns]) 
+    for tree in batter_model.estimators_]).T
+
+
 batter_predictions = batter_model.predict(X[training_columns])
+
+batter_vars = [np.std(tree_preds) for tree_preds in batter_tree_predictions]
+
+#z=0.7 coresponds to roughly a 75% confidence interval 
+#
+z = 0.7
+
+batter_predictions_bottom = np.array([p - z*s
+    for p, s in zip(batter_predictions, batter_vars)])
+
+batter_predictions_top = np.array([p + z*s
+    for p, s in zip(batter_predictions, batter_vars)])
+
+
 batter_prediction_df = pd.DataFrame({'Player': X.batter, 
                                      'Position': X.position, 
                                      'Salary': X.batter_dk_salary, 
                                      'Prediction': batter_predictions})
+
+batter_prediction_df_bottom = pd.DataFrame({'Player': X.batter, 
+                                     'Position': X.position, 
+                                     'Salary': X.batter_dk_salary, 
+                                     'Prediction': batter_predictions_bottom})
+
+batter_prediction_df_top = pd.DataFrame({'Player': X.batter, 
+                                     'Position': X.position, 
+                                     'Salary': X.batter_dk_salary, 
+                                     'Prediction': batter_predictions_top})
 
 #Whew! That was a lot of work but we finally have projections for the batters on the slate
 
@@ -430,133 +531,154 @@ pitcher_train_columns.remove('pitcher')
 
 #Training pitcher model on master dataset
 print('Training pitcher model...\n')
-pitcher_model = RandomForestRegressor(n_estimators=300, max_depth=10, max_features='sqrt')
+pitcher_model = RandomForestRegressor(n_estimators=N, max_depth=10, max_features='sqrt')
 pitcher_model.fit(pitcher_master[pitcher_train_columns], pitcher_master.pitcher_dk_points)
+
+pitcher_tree_predictions = np.array([tree.predict(pitchers_[pitcher_train_columns]) 
+    for tree in pitcher_model.estimators_]).T
+
+
 pitcher_predictions = pitcher_model.predict(pitchers_[pitcher_train_columns])
+
+pitcher_vars = [np.std(tree_preds) for tree_preds in pitcher_tree_predictions]
+
+pitcher_predictions_bottom = np.array([p - z*s
+    for p, s in zip(pitcher_predictions, pitcher_vars)])
+
+pitcher_predictions_top = np.array([p + z*s 
+    for p, s in zip(pitcher_predictions, pitcher_vars)])
+
+# pitcher_predictions25 = np.array([np.percentile(boot, perc1) for boot in pitcher_boot_dist])
+# pitcher_predictions75 = np.array([np.percentile(boot, perc2) for boot in pitcher_boot_dist])
+
+
 
 pitcher_pred_df = pd.DataFrame({'Player': pitchers_.pitcher, 
                                      'Position': ['SP']*pitchers_.shape[0], 
                                      'Salary': pitchers_.pitcher_dk_salary, 
                                      'Prediction': pitcher_predictions})
 
+pitcher_pred_df_bottom = pd.DataFrame({'Player': pitchers_.pitcher, 
+                                     'Position': ['SP']*pitchers_.shape[0], 
+                                     'Salary': pitchers_.pitcher_dk_salary, 
+                                     'Prediction': pitcher_predictions_bottom})
+
+pitcher_pred_df_top = pd.DataFrame({'Player': pitchers_.pitcher, 
+                                     'Position': ['SP']*pitchers_.shape[0], 
+                                     'Salary': pitchers_.pitcher_dk_salary, 
+                                     'Prediction': pitcher_predictions_top})
+
 print('Pitcher predictions...')
 print(pitcher_pred_df)
 
 predictions = pd.concat([batter_prediction_df, pitcher_pred_df])
+
+predictions_bottom = pd.concat([batter_prediction_df_bottom, pitcher_pred_df_bottom])
+predictions_top = pd.concat([batter_prediction_df_top, pitcher_pred_df_top])
+
 predictions = predictions.drop_duplicates(subset=['Player'])
+predictions_bottom = predictions_bottom.drop_duplicates(subset=['Player'])
+predictions_top = predictions_top.drop_duplicates(subset=['Player'])
+
 
 print('\nPlayers unable to assign predictions to:\n')
-print([p for p in starting.Name.values if p not in predictions.Player.values])
+missed_players = [p for p in starting.Name.values if p not in predictions.Player.values]
+print(missed_players)
+print(hitters_[hitters_.batter.isin(missed_players)])
 
+
+# print('predictions25')
+# print(predictions25)
 
 # print('\nTravis Shaw:')
 # print(predictions[predictions.Player == 'Travis Shaw'])
 
 #droping players
-# predictions = predictions[predictions.Player != 'Clayton Kershaw']
+##Upton is in lineup thursday
+# predictions = predictions[predictions.Player != 'Kyle Freeland']
+# predictions_bottom = predictions_bottom[predictions_bottom.Player != 'Kyle Freeland']
+# predictions_top = predictions_top[predictions_top.Player != 'Kyle Freeland']
+# 'Steven Wright'
+
+
+
+# predictions = predictions[predictions.Player != 'Eduardo Rodriguez']
+# predictions_bottom = predictions_bottom[predictions_bottom.Player != 'Eduardo Rodriguez']
+# predictions_top = predictions_top[predictions_top.Player != 'Eduardo Rodriguez']
+
+# predictions = predictions[predictions.Player != 'Hanley Ramirez']
+# predictions_bottom = predictions_bottom[predictions_bottom.Player != 'Hanley Ramirez']
+# predictions_top = predictions_top[predictions_top.Player != 'Hanley Ramirez']
+
+# predictions = predictions[predictions.Player != 'Hyun-Jin Ryu']
+# predictions_bottom = predictions_bottom[predictions_bottom.Player != 'Hyun-Jin Ryu']
+# predictions_top = predictions_top[predictions_top.Player != 'Hyun-Jin Ryu']
+
+# predictions = predictions[predictions.Player != 'Manuel Margot']
+# predictions = predictions[predictions.Player != 'Austin Hedges']
+# predictions = predictions[predictions.Player != 'Cesar Hernandez']
+# predictions = predictions[predictions.Player != 'Chris Sale']
+
+predictions.loc[predictions.Position == 'RP', 'Position'] = 'P'
 # predictions = predictions[predictions.Player != 'Jose Ramirez']
 # predictions = predictions[predictions.Player != 'Justin Verlander']
 # predictions = predictions[predictions.Player != 'Justin Turner']
 
 #Reformatting predictions df to work with protella_opt
-predictions.reset_index(inplace=1)
-multi_pos = predictions.loc[predictions.Position.str.contains('/')]
-multi_pos1 = multi_pos.copy()
-multi_pos2 = multi_pos.copy()
-multi_pos1.Position = multi_pos.Position.apply(lambda x: x[:x.find('/')])
-multi_pos2.Position = multi_pos.Position.apply(lambda x: x[x.find('/') + 1:])
-split_predictions = predictions.loc[~predictions.Position.str.contains('/'), :].append(multi_pos1).append(multi_pos2)
-split_predictions.loc[split_predictions.Position == 'SP', 'Position'] = 'P'
-split_predictions.Salary = split_predictions.Salary.apply(lambda x : int(1000 * x))
-split_predictions.loc[:, ['Player', 'Position', 'Prediction', 'Salary']].to_csv(
-    '/tmp/dk_mlb_predictions.csv', header=None, index=None)
+
+optimal_dfs = list()
+
+for preds in [predictions, predictions_bottom, predictions_top]:
+    preds.reset_index(inplace=1)
+    multi_pos = preds.loc[preds.Position.str.contains('/')]
+    multi_pos1 = multi_pos.copy()
+    multi_pos2 = multi_pos.copy()
+    multi_pos1.Position = multi_pos.Position.apply(lambda x: x[:x.find('/')])
+    multi_pos2.Position = multi_pos.Position.apply(lambda x: x[x.find('/') + 1:])
+    split_predictions = preds.loc[~preds.Position.str.contains('/'), :].append(multi_pos1).append(multi_pos2)
+    split_predictions.loc[split_predictions.Position == 'SP', 'Position'] = 'P'
+    split_predictions.Salary = split_predictions.Salary.apply(lambda x : int(1000 * x))
+    split_predictions.loc[:, ['Player', 'Position', 'Prediction', 'Salary']].to_csv(
+        '/tmp/dk_mlb_predictions.csv', header=None, index=None)
 
 
-#Optimization
-print('Optimizing predictions...\n')
+    #Optimization
+    if preds is predictions:
+        print('Optimizing predictions...\n')
+    elif preds is predictions_bottom:
+        print('Optimizing cash game predictions...\n')
+    elif preds is predictions_top:
+        print('Optimizing tournament predictions...\n')
+    #FUCK ORTOOLS! run protella_opt!!!
 
-#FUCK ORTOOLS! run protella_opt!!!
+    cmd = 'javac LineupOptimizerDK_MLB.java && java LineupOptimizerDK_MLB'
+    result = check_output([cmd], shell=True)
+    lineups = ast.literal_eval(result.decode())
+    optimal_lineup = lineups[-1]
+    optimal_players = [p.split('(')[0] for p in optimal_lineup]
+    optimal_player_positions = {p.split('(')[0]: p.split('(')[1].split(')')[0] for p in optimal_lineup}
 
-cmd = 'javac LineupOptimizerDK_MLB.java && java LineupOptimizerDK_MLB'
-result = check_output([cmd], shell=True)
-lineups = ast.literal_eval(result.decode())
-optimal_lineup = lineups[-1]
-optimal_players = [p.split('(')[0] for p in optimal_lineup]
-optimal_player_positions = {p.split('(')[0]: p.split('(')[1].split(')')[0] for p in optimal_lineup}
-
-optimal_df = split_predictions[split_predictions.Player.isin(optimal_players)]
-
-# optimal_df['optimal_position'] = optimal_df.Player.apply(lambda x: optimal_player_positions[x])
-# optimal_df['keep'] = optimal_df.apply(lambda row: 1 if row.Position == row.optimal_position else 0, axis=1)
-
-# optimal_df = optimal_df[optimal_df.Position == optimal_df.optimal_position]
-
-# optimal_df.drop('optimal_position', axis=1, inplace=1)
-
-optimal_df.drop_duplicates(subset=['Player'], inplace=1)
-
-#Hacking ortools import due to PYTHONPATH issues, don't ask...
-# __path_to_ortools__ = '../../../../lib/python3.5/site-packages'
-# sys.path.append(__path_to_ortools__)
-# from ortools.linear_solver import pywraplp
-
-# #TODO cycle through optimization with all combinations of pitchers 
-
-# #Set optimization constraints
-# SALARY_CAP = 50
-# POSITION_LIMITS = [
-#     ["SP", 2, 2],
-#     ["C", 1, 1],
-#     ["1B", 1, 1],
-#     ["2B", 1, 1],
-#     ["3B", 1, 1],
-#     ["SS", 1, 1],
-#     ["OF", 3, 3]
-# ]
-# ROSTER_SIZE = 10
-
-# #Init solver and define variables
-# solver = pywraplp.Solver('FD', pywraplp.Solver.CBC_MIXED_INTEGER_PROGRAMMING)
-
-# variables = [solver.IntVar(0, 1, row.Player) for _, row in predictions.iterrows()]
+    optimal_df = split_predictions[split_predictions.Player.isin(optimal_players)]
+    optimal_df.drop_duplicates(subset=['Player'], inplace=1)
+    optimal_dfs.append(optimal_df)
 
 
-# objective = solver.Objective()
-# objective.SetMaximization()
-
-# [objective.SetCoefficient(variables[i], row.Salary) for i, row in predictions.iterrows()]
-
-# salary_cap = solver.Constraint(0, SALARY_CAP)
-# [salary_cap.SetCoefficient(variables[i], row.Salary) for i, row in predictions.iterrows()]
-
-# for position, min_limit, max_limit in POSITION_LIMITS:
-#     position_cap = solver.Constraint(min_limit, max_limit) 
-#     for i, row in predictions.iterrows():
-#         if position in row.Position:
-#             position_cap.SetCoefficient(variables[i], 1)  
-
-# size_cap = solver.Constraint(ROSTER_SIZE, ROSTER_SIZE)
-
-# [size_cap.SetCoefficient(variable, 1) for variable in variables]
-
-# solution = solver.Solve()
-
-# roster = list()
-
-# if solution == solver.OPTIMAL:
-#     for i, row in predictions.iterrows():
-#         if variables[i].solution_value() == 1:
-#             roster.append({
-#                 'Player': row.Player,
-#                 'Position': row.Position,
-#                 'DK Salary': '$' + str(int(row.Salary*1000)),
-#                 'Projection': round(row.Prediction, 2)
-#                 })
-# else:
-#     raise SolverError('Google-ortools was unable to find an optimal lineup. Check constraints and try again.')
-
+#Print results
 print('Optimization complete! Optimal MLB Lineup for {}:\n'.format(slate_date))
-print(tabulate.tabulate(optimal_df, tablefmt="psql", headers="keys"))
-print('\nTotal Projected Points:', optimal_df.Prediction.sum())
-print('Total Salary Spent:', optimal_df.Salary.sum())
+
+print('\nOptimal Overall Lineup (Mean)')
+print(tabulate.tabulate(optimal_dfs[0], tablefmt="psql", headers="keys"))
+print('\nTotal Projected Points:', optimal_dfs[0].Prediction.sum())
+print('Total Salary Spent:', optimal_dfs[0].Salary.sum())
+
+print('\nOptimal Cash Game Lineup (-1 sigma)')
+print(tabulate.tabulate(optimal_dfs[1], tablefmt="psql", headers="keys"))
+print('\nTotal Projected Points:', optimal_dfs[1].Prediction.sum())
+print('Total Salary Spent:', optimal_dfs[1].Salary.sum())
+
+print('\nOptimal Tournament Lineup (+1 sigma)')
+print(tabulate.tabulate(optimal_dfs[2], tablefmt="psql", headers="keys"))
+print('\nTotal Projected Points:', optimal_dfs[2].Prediction.sum())
+print('Total Salary Spent:', optimal_dfs[2].Salary.sum())
+
 
