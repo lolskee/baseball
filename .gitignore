@@ -1,4 +1,4 @@
-*ipynb
+*.DS_Store
 mlb_data*
 models*
 pickles*
